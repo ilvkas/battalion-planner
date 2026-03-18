@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,18 +15,45 @@ export default function BattalionTimePlannerMockup() {
     const [workEnd, setWorkEnd] = useState("18:00");
     const [showOnlyReports, setShowOnlyReports] = useState(false);
 
-    const [blockers, setBlockers] = useState([
-        { name: "Mittagessen", start: "12:00", end: "13:00" },
-        { name: "Abendessen", start: "18:00", end: "18:45" }
-    ]);
+    const [blockers, setBlockers] = useState([]);
 
     const [reports, setReports] = useState(
-        reportKeys.map((key, i) => ({ key, fixed: i === 0, fixedTime: i === 0 ? "" : "" }))
+        reportKeys.map((key, i) => ({ key, fixed: i === 0, fixedTime: i === 0 ? "" : "", duration: 60 }))
     );
+
 
     const [phaseDurations, setPhaseDurations] = useState(
         reportKeys.slice(0, -1).map(() => 60)
     );
+
+    const [completedItems, setCompletedItems] = useState({});
+    const [showCompleted, setShowCompleted] = useState(false);
+
+    const getTimelineItemKey = (e) => {
+        return `${e.type}_${e.label}_${(e.time || e.start)?.getTime()}`;
+    };
+
+    const toggleItemCompletion = (key) => {
+        setCompletedItems(prev => ({
+            ...prev,
+            [key]: !prev[key]
+        }));
+    };
+
+    const isBlockerActiveForDate = (b, d) => {
+        if (!b.type || b.type === "daily") return true;
+        if (b.type === "specific") {
+            if (!b.specificDate) return false;
+            
+            const dYear = d.getFullYear();
+            const dMonth = String(d.getMonth() + 1).padStart(2, '0');
+            const dDay = String(d.getDate()).padStart(2, '0');
+            const localDStr = `${dYear}-${dMonth}-${dDay}`;
+            
+            return b.specificDate === localDStr;
+        }
+        return true;
+    };
 
     const parseTimeToday = (base, timeStr) => {
         if (!base) return new Date();
@@ -57,6 +84,7 @@ export default function BattalionTimePlannerMockup() {
         while (changed) {
             changed = false;
             for (const b of blockers) {
+                if (!isBlockerActiveForDate(b, d)) continue;
                 const bs = parseTimeToday(d, b.start);
                 const be = parseTimeToday(d, b.end);
                 if (d >= bs && d < be) {
@@ -95,6 +123,7 @@ export default function BattalionTimePlannerMockup() {
             changed = false;
             // Check if inside a blocker
             for (const b of blockers) {
+                if (!isBlockerActiveForDate(b, d)) continue;
                 const bs = parseTimeToday(d, b.start);
                 const be = parseTimeToday(d, b.end);
                 // if d is within (bs, be], move to bs
@@ -118,20 +147,21 @@ export default function BattalionTimePlannerMockup() {
 
         while (remaining > 0) {
             current = moveBeforeBlockers(current);
-            const startOfWork = parseTimeToday(current, workStart); // Start of working day
-            // Calculate available time in current working window backwards
-            // If current is 18:00 (end work) and start work is 07:30.
-            // Diff is current - startOfWork.
-            const diff = Math.min(remaining, Math.max(0, (current - startOfWork) / 60000));
-
-            current = new Date(current.getTime() - diff * 60000);
-            remaining -= diff;
-
-            if (remaining > 0) {
-                // If we still have time to subtract, we must be at startOfWork. 
-                // We need to jump to previous day end or skip blockers.
-                current = moveBeforeBlockers(current);
+            const startOfWork = parseTimeToday(current, workStart); 
+            let prevBoundary = startOfWork;
+            
+            for (const b of blockers) {
+                if (!isBlockerActiveForDate(b, current)) continue;
+                const be = parseTimeToday(current, b.end);
+                if (be < current && be > prevBoundary) {
+                    prevBoundary = be;
+                }
             }
+            
+            const availableMins = Math.max(0, (current - prevBoundary) / 60000);
+            const toSub = Math.min(remaining, availableMins);
+            current = new Date(current.getTime() - toSub * 60000);
+            remaining -= toSub;
         }
         return current;
     };
@@ -143,12 +173,92 @@ export default function BattalionTimePlannerMockup() {
         while (remaining > 0) {
             current = movePastBlockers(current);
             const endOfWork = parseTimeToday(current, workEnd);
-            const diff = Math.min(remaining, Math.max(0, (endOfWork - current) / 60000));
-            current = new Date(current.getTime() + diff * 60000);
-            remaining -= diff;
-            if (remaining > 0) current = movePastBlockers(current);
+            let nextBoundary = endOfWork;
+            
+            for (const b of blockers) {
+                if (!isBlockerActiveForDate(b, current)) continue;
+                const bs = parseTimeToday(current, b.start);
+                if (bs > current && bs < nextBoundary) {
+                    nextBoundary = bs;
+                }
+            }
+            
+            const availableMins = Math.max(0, (nextBoundary - current) / 60000);
+            const toAdd = Math.min(remaining, availableMins);
+            current = new Date(current.getTime() + toAdd * 60000);
+            remaining -= toAdd;
         }
         return current;
+    };
+
+    const addPhaseAndPushChunks = (entries, typeStr, label, start, minutes) => {
+        let current = new Date(start);
+        let remaining = minutes;
+        let loops = 0;
+
+        while (remaining > 0 && loops < 1000) {
+            loops++;
+            current = movePastBlockers(current);
+            const endOfWork = parseTimeToday(current, workEnd);
+            let nextBoundary = endOfWork;
+            
+            for (const b of blockers) {
+                if (!isBlockerActiveForDate(b, current)) continue;
+                const bs = parseTimeToday(current, b.start);
+                if (bs > current && bs < nextBoundary) {
+                    nextBoundary = bs;
+                }
+            }
+            
+            const availableMins = Math.max(0, (nextBoundary - current) / 60000);
+            const toAdd = Math.min(remaining, availableMins);
+            
+            if (toAdd > 0) {
+                const chunkEnd = new Date(current.getTime() + toAdd * 60000);
+                const durationStr = toAdd % 60 === 0 ? `${toAdd / 60}h` : `${toAdd} Min`;
+                entries.push({ type: typeStr, label: `${label} (${durationStr})`, start: new Date(current), end: chunkEnd });
+                current = chunkEnd;
+                remaining -= toAdd;
+            } else if (remaining > 0) {
+                current = new Date(current.getTime() + 60000);
+            }
+        }
+        return current;
+    };
+
+    const pushChunksBetween = (entries, typeStr, label, start, end) => {
+        let current = new Date(start);
+        const finalEnd = new Date(end);
+        let loops = 0;
+
+        while (current < finalEnd && loops < 1000) {
+            loops++;
+            current = movePastBlockers(current);
+            if (current >= finalEnd) break;
+            
+            const endOfWork = parseTimeToday(current, workEnd);
+            let nextBoundary = endOfWork;
+            
+            for (const b of blockers) {
+                if (!isBlockerActiveForDate(b, current)) continue;
+                const bs = parseTimeToday(current, b.start);
+                if (bs > current && bs < nextBoundary) {
+                    nextBoundary = bs;
+                }
+            }
+            if (nextBoundary > finalEnd) nextBoundary = finalEnd;
+            
+            const chunkMins = Math.max(0, (nextBoundary - current) / 60000);
+            
+            if (chunkMins > 0) {
+                const chunkEnd = new Date(current.getTime() + chunkMins * 60000);
+                const durationStr = chunkMins % 60 === 0 ? `${chunkMins / 60}h` : `${chunkMins} Min`;
+                entries.push({ type: typeStr, label: `${label} (${durationStr})`, start: new Date(current), end: chunkEnd });
+                current = chunkEnd;
+            } else {
+                current = new Date(current.getTime() + 60000); // Failsafe
+            }
+        }
     };
 
     // Synchronisation INI Grundparameter ↔ INI Rapport
@@ -188,13 +298,13 @@ export default function BattalionTimePlannerMockup() {
             } else if (i === 0) {
                 reportStart = movePastBlockers(new Date(iniTime));
             } else {
-                reportStart = cursor;
+                reportStart = movePastBlockers(cursor);
             }
 
             const rehearsal = subtractMinutesRespectingRules(reportStart, REHEARSAL_OFFSET_MIN);
             entries.push({ type: "Rehearsal", label: r.key, time: rehearsal });
 
-            const reportEnd = addMinutesRespectingRules(reportStart, REPORT_DURATION_MIN);
+            const reportEnd = addMinutesRespectingRules(reportStart, r.duration);
             entries.push({ type: "Rapport", label: r.key, start: reportStart, end: reportEnd });
 
             if (i < reports.length - 1) {
@@ -204,30 +314,66 @@ export default function BattalionTimePlannerMockup() {
                 if (next.fixed && next.fixedTime) {
                     phaseEnd = movePastBlockers(new Date(next.fixedTime));
                     const autoDuration = Math.max(0, (phaseEnd - reportEnd) / 60000);
-                    phaseDurations[i] = Math.round(autoDuration); // This is side-effect in render!
-                    // We cannot set state in render safely for derived values like this without loops.
-                    // Visualizing only for now? No, logic depends on it. 
-                    // I'll leave the state update but beware of loops.
-                    // React will catch infinite loops.
+                    phaseDurations[i] = Math.round(autoDuration); // Side effect in render, keeping user logic
+                    
+                    pushChunksBetween(entries, "Arbeitsphase", `${r.key} \u2192 ${next.key}`, reportEnd, phaseEnd);
                 } else {
-                    phaseEnd = addMinutesRespectingRules(reportEnd, phaseDurations[i]);
+                    phaseEnd = addPhaseAndPushChunks(entries, "Arbeitsphase", `${r.key} \u2192 ${next.key}`, reportEnd, phaseDurations[i]);
                 }
 
-                entries.push({ type: "Arbeitsphase", label: `${r.key} \u2192 ${next.key}`, start: reportEnd, end: phaseEnd });
                 cursor = phaseEnd;
             }
         }
 
-        blockers.forEach(b => {
-            entries.push({ type: "Blocktermin", label: b.name, start: parseTimeToday(new Date(iniTime), b.start), end: parseTimeToday(new Date(iniTime), b.end) });
-        });
+        if (entries.length > 0) {
+            const activeDatesSet = new Set(
+                entries
+                    .filter(e => e.type !== "Blocktermin")
+                    .map(e => {
+                        const d = e.start || e.time;
+                        return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+                    })
+            );
 
+            activeDatesSet.forEach(dateStr => {
+                const [y, m, d] = dateStr.split('-');
+                const currentDateObj = new Date(Number(y), Number(m)-1, Number(d), 0, 0, 0, 0);
+
+                blockers.forEach(b => {
+                    if (isBlockerActiveForDate(b, currentDateObj)) {
+                        entries.push({ 
+                            type: "Blocktermin", 
+                            label: b.name, 
+                            start: parseTimeToday(currentDateObj, b.start), 
+                            end: parseTimeToday(currentDateObj, b.end) 
+                        });
+                    }
+                });
+            });
+
+            // Find overlapping Rapports
+            const blockEntries = entries.filter(e => e.type === "Blocktermin");
+            entries.filter(e => e.type === "Rapport").forEach(rapport => {
+                const overlap = blockEntries.some(b => {
+                    return (b.start < rapport.end) && (b.end > rapport.start);
+                });
+                if (overlap) {
+                    rapport.hasOverlapWarning = true;
+                }
+            });
+        }
+
+        const now = new Date();
         return entries
+            .map(e => ({ ...e, isPast: (e.time || e.start) < now }))
             .filter(e => !showOnlyReports || e.type === "Rapport")
             .sort((a, b) => new Date(a.time || a.start) - new Date(b.time || b.start));
     };
 
     const timeline = calculateTimeline();
+    const hasPastItems = timeline.some(e => e.isPast && !completedItems[getTimelineItemKey(e)]);
+    const hasOverlapItems = timeline.some(e => e.hasOverlapWarning && !completedItems[getTimelineItemKey(e)]);
+
 
     const format = (d) => new Date(d).toLocaleString("de-CH", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit", hour12: false });
 
@@ -242,39 +388,114 @@ export default function BattalionTimePlannerMockup() {
                 {/* Left Column: Timeline */}
                 <div className="order-2 lg:order-1">
                     <Card className="rounded-2xl shadow h-fit sticky top-6">
-                        <CardHeader className="flex flex-row items-center justify-between border-b pb-4">
-                            <CardTitle className="text-xl">Zeitliche Gesamtübersicht</CardTitle>
-                            <div className="flex items-center gap-2 text-sm">
-                                <Checkbox checked={showOnlyReports} onCheckedChange={setShowOnlyReports} />
-                                <Label>Nur Rapporte</Label>
+                        <CardHeader className="flex flex-col gap-4 border-b pb-4">
+                            {(hasPastItems || hasOverlapItems) && (
+                                <div className={`${hasOverlapItems ? 'bg-red-50 border-red-500 text-red-700' : 'bg-orange-50 border-orange-500 text-orange-700'} border-l-4 p-4 rounded shadow-sm mb-4`}>
+                                    <p className="font-bold flex items-center gap-2">
+                                        <span>⚠️</span> Achtung
+                                    </p>
+                                    <p className="text-sm mt-1 flex flex-col gap-1">
+                                        {hasPastItems && <span>Einige geplante Zeiten liegen in der Vergangenheit.</span>}
+                                        {hasOverlapItems && <span>Ein oder mehrere Rapporte überschneiden sich mit einem Blocktermin!</span>}
+                                    </p>
+                                </div>
+                            )}
+                            <div className="flex flex-row items-center justify-between">
+                                <CardTitle className="text-xl">Zeitliche Gesamtübersicht</CardTitle>
+                            </div>
+                            <div className="flex flex-row items-center gap-6 text-sm flex-wrap">
+                                <div className="flex items-center gap-2">
+                                    <Checkbox checked={showOnlyReports} onCheckedChange={setShowOnlyReports} />
+                                    <Label>Nur Rapporte</Label>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <Checkbox checked={showCompleted} onCheckedChange={setShowCompleted} />
+                                    <Label>Erledigte anzeigen</Label>
+                                </div>
                             </div>
                         </CardHeader>
                         <CardContent className="grid gap-2 text-sm pt-4">
-                            <div className="grid grid-cols-12 gap-2 font-semibold text-gray-500 pb-2 px-2">
-                                <div className="col-span-3">Typ</div>
-                                <div className="col-span-3">Bezeichnung</div>
-                                <div className="col-span-3">Start</div>
-                                <div className="col-span-3">Ende</div>
+                            <div className="grid grid-cols-[auto_1fr_1fr_1fr_1fr] gap-2 font-semibold text-gray-500 pb-2 px-2">
+                                <div className="w-6"></div>
+                                <div>Typ</div>
+                                <div>Bezeichnung</div>
+                                <div>Start</div>
+                                <div>Ende</div>
                             </div>
-                            <div className="space-y-2">
-                                {timeline.map((e, i) => {
-                                    const isRapport = e.type === "Rapport";
-                                    const isBlock = e.type === "Blocktermin";
-                                    const isRehearsal = e.type === "Rehearsal";
+                            <div className="space-y-3">
+                                {timeline
+                                    .filter(e => showCompleted || !completedItems[getTimelineItemKey(e)])
+                                    .map((e, index, visibleArr) => {
+                                        const key = getTimelineItemKey(e);
+                                        const isCompleted = completedItems[key];
 
-                                    let rowClass = "bg-white border-gray-200";
-                                    if (isRapport) rowClass = "bg-red-50 border-red-200 font-semibold";
-                                    if (isBlock) rowClass = "bg-gray-100 border-gray-300 text-gray-500";
-                                    if (isRehearsal) rowClass = "bg-blue-50 border-blue-200 text-blue-700";
+                                        let dayChanged = false;
+                                        const currDate = e.start || e.time;
+                                        if (currDate) {
+                                            if (index === 0) {
+                                                dayChanged = true;
+                                            } else {
+                                                const prevE = visibleArr[index - 1];
+                                                const prevDate = prevE.start || prevE.time;
+                                                if (prevDate) {
+                                                    dayChanged = prevDate.getDate() !== currDate.getDate() ||
+                                                                 prevDate.getMonth() !== currDate.getMonth() ||
+                                                                 prevDate.getFullYear() !== currDate.getFullYear();
+                                                }
+                                            }
+                                        }
 
-                                    return (
-                                        <div key={i} className={`grid grid-cols-12 gap-2 border rounded-lg p-3 items-center shadow-sm transition-all hover:shadow-md ${rowClass}`}>
-                                            <div className="col-span-3 truncate" title={e.type}>{e.type}</div>
-                                            <div className="col-span-3 font-medium truncate" title={e.label}>{e.label}</div>
-                                            <div className="col-span-3 font-mono text-xs">{e.time ? format(e.time) : e.start ? format(e.start) : ""}</div>
-                                            <div className="col-span-3 font-mono text-xs">{e.end ? format(e.end) : ""}</div>
-                                        </div>
-                                    );
+                                        const isRapport = e.type === "Rapport";
+                                        const isBlock = e.type === "Blocktermin";
+                                        const isRehearsal = e.type === "Rehearsal";
+
+                                        let rowClass = "bg-white border-gray-200";
+                                        let textClass = "";
+                                        
+                                        if (isCompleted) {
+                                            rowClass = "bg-gray-100 border-gray-300 opacity-60";
+                                            textClass = "text-gray-500 line-through";
+                                        } else {
+                                            if (isRapport) rowClass = "bg-red-50 border-red-200 font-semibold";
+                                            if (isBlock) {
+                                                rowClass = "bg-gray-100 border-gray-300 text-gray-500";
+                                                textClass = "text-gray-500";
+                                            }
+                                            if (isRehearsal) {
+                                                rowClass = "bg-blue-50 border-blue-200";
+                                                textClass = "text-blue-700";
+                                            }
+                                        }
+
+                                        const timeDisplay = e.time ? format(e.time) : e.start ? format(e.start) : "";
+                                        const showWarning = e.isPast && !isCompleted;
+
+                                        return (
+                                            <React.Fragment key={key}>
+                                                {dayChanged && (
+                                                    <div className="flex items-center gap-4 py-2 mt-4 first:mt-0">
+                                                        <div className="h-px bg-gray-300 flex-1"></div>
+                                                        <div className="text-xs text-brand-dark font-bold uppercase tracking-wider">
+                                                            {new Date(currDate).toLocaleDateString("de-CH", { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' })}
+                                                        </div>
+                                                        <div className="h-px bg-gray-300 flex-1"></div>
+                                                    </div>
+                                                )}
+                                                <div className={`grid grid-cols-[auto_1fr_1fr_1fr_1fr] gap-2 border rounded-lg p-3 items-center shadow-sm transition-all hover:shadow-md ${rowClass}`}>
+                                                    <div className="w-6 flex justify-center">
+                                                        <Checkbox checked={isCompleted || false} onCheckedChange={() => toggleItemCompletion(key)} />
+                                                    </div>
+                                                    <div className={`truncate ${textClass}`} title={e.type}>{e.type}</div>
+                                                    <div className={`font-medium truncate ${textClass}`} title={e.label}>{e.label}</div>
+                                                    <div className={`font-mono text-xs flex items-center gap-1 ${textClass} ${showWarning ? 'text-orange-600 font-bold' : ''}`}>
+                                                        {e.hasOverlapWarning && <span title="Überschneidet sich mit Blocktermin" className="text-red-600 font-bold">⚠️ Konflikt</span>}
+                                                        {showWarning && <span title="In der Vergangenheit">⚠️</span>}
+                                                        {timeDisplay}
+                                                    </div>
+                                                    <div className={`font-mono text-xs ${textClass}`}>{e.end ? format(e.end) : ""}</div>
+                                                </div>
+                                            </React.Fragment>
+                                        );
                                 })}
                                 {timeline.length === 0 && (
                                     <div className="text-center text-gray-400 py-10">
@@ -291,10 +512,6 @@ export default function BattalionTimePlannerMockup() {
                     <Card className="rounded-2xl shadow">
                         <CardHeader><CardTitle>Grundparameter</CardTitle></CardHeader>
                         <CardContent className="grid gap-4">
-                            <div className="grid gap-2">
-                                <Label>Startzeit INI</Label>
-                                <Input type="datetime-local" value={iniTime} onChange={(e) => handleIniChange(e.target.value)} />
-                            </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="grid gap-2">
                                     <Label>Arbeitsbeginn</Label>
@@ -305,37 +522,67 @@ export default function BattalionTimePlannerMockup() {
                                     <Input type="time" value={workEnd} onChange={(e) => setWorkEnd(e.target.value)} />
                                 </div>
                             </div>
+                            <div className="grid gap-2 border-t border-gray-100 pt-4">
+                                <Label>Startzeit INI</Label>
+                                <Input type="datetime-local" value={iniTime} onChange={(e) => handleIniChange(e.target.value)} />
+                            </div>
                         </CardContent>
                     </Card>
 
                     <Card className="rounded-2xl shadow">
                         <CardHeader className="flex flex-row items-center justify-between">
                             <CardTitle>Blocktermine</CardTitle>
-                            <Button size="sm" onClick={() => setBlockers([...blockers, { name: "Neuer Block", start: "10:00", end: "11:00" }])}>
-                                + Hinzufügen
-                            </Button>
-                        </CardHeader>
-                        <CardContent className="grid gap-3">
-                            {blockers.map((b, i) => (
-                                <div key={i} className="flex gap-2 items-center">
+                            <Button size="sm" onClick={() => {
+                                                const defaultDate = iniTime ? iniTime.split('T')[0] : new Date().toISOString().split('T')[0];
+                                                setBlockers([...blockers, { id: Date.now(), name: "Neuer Block", start: "10:00", end: "11:00", type: "daily", specificDate: defaultDate }]);
+                                            }}>
+                                                + Hinzufügen
+                                            </Button>
+                                        </CardHeader>
+                                        <CardContent className="grid gap-3">
+                                            {blockers.map((b, i) => (
+                                                <div key={b.id || i} className="flex gap-2 items-center flex-wrap bg-gray-50 p-2 rounded border border-gray-100">
                                     <Input value={b.name} onChange={(e) => {
                                         const copy = [...blockers]; copy[i].name = e.target.value; setBlockers(copy);
-                                    }} className="flex-1" />
-                                    <Input type="time" value={b.start} onChange={(e) => {
-                                        const copy = [...blockers]; copy[i].start = e.target.value; setBlockers(copy);
-                                    }} className="w-24" />
-                                    <span className="text-gray-400">-</span>
-                                    <Input type="time" value={b.end} onChange={(e) => {
-                                        const copy = [...blockers]; copy[i].end = e.target.value; setBlockers(copy);
-                                    }} className="w-24" />
-                                    <Button variant="ghost" size="sm" className="h-9 w-9 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
-                                        onClick={() => {
-                                            const copy = blockers.filter((_, idx) => idx !== i);
-                                            setBlockers(copy);
+                                    }} className="flex-[2] min-w-[120px]" placeholder="Name" />
+                                    
+                                    <select
+                                        className="h-9 rounded-md border border-input bg-white px-3 py-1 text-sm shadow-sm flex-1 min-w-[100px]"
+                                        value={b.type || "daily"}
+                                        onChange={(e) => {
+                                            const copy = [...blockers]; copy[i].type = e.target.value; setBlockers(copy);
                                         }}
                                     >
-                                        x
-                                    </Button>
+                                        <option value="daily">Täglich</option>
+                                        <option value="specific">Einmalig</option>
+                                    </select>
+                                    
+                                    {(b.type === "specific") && (
+                                        <div className="flex items-center gap-1 bg-white border rounded px-2">
+                                            <Label className="text-xs whitespace-nowrap text-gray-500">Datum</Label>
+                                            <Input type="date" value={b.specificDate || (iniTime ? iniTime.split('T')[0] : '')} onChange={(e) => {
+                                                const copy = [...blockers]; copy[i].specificDate = e.target.value; setBlockers(copy);
+                                            }} className="w-[125px] h-7 px-1 border-none shadow-none text-xs" />
+                                        </div>
+                                    )}
+
+                                    <div className="flex gap-1 items-center ml-auto">
+                                        <Input type="time" value={b.start} onChange={(e) => {
+                                            const copy = [...blockers]; copy[i].start = e.target.value; setBlockers(copy);
+                                        }} className="w-[84px] px-2 text-center" />
+                                        <span className="text-gray-400">-</span>
+                                        <Input type="time" value={b.end} onChange={(e) => {
+                                            const copy = [...blockers]; copy[i].end = e.target.value; setBlockers(copy);
+                                        }} className="w-[84px] px-2 text-center" />
+                                        <Button variant="ghost" size="sm" className="h-9 w-9 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 ml-1"
+                                            onClick={() => {
+                                                const copy = blockers.filter((_, idx) => idx !== i);
+                                                setBlockers(copy);
+                                            }}
+                                        >
+                                            x
+                                        </Button>
+                                    </div>
                                 </div>
                             ))}
                         </CardContent>
@@ -367,20 +614,31 @@ export default function BattalionTimePlannerMockup() {
                                         </div>
                                     )}
 
-                                    {i < phaseDurations.length && (
-                                        <div className="grid grid-cols-[1fr,auto] gap-2 items-center mt-2 border-t pt-2">
-                                            <Label className="text-xs text-gray-500">Phase bis {reports[i + 1].key} (Min)</Label>
-                                            <Input
-                                                type="number"
-                                                className="w-20 text-right h-8"
-                                                value={phaseDurations[i]}
-                                                disabled={reports[i + 1].fixed}
-                                                onChange={(e) => {
-                                                    const copy = [...phaseDurations]; copy[i] = Number(e.target.value); setPhaseDurations(copy);
-                                                }}
-                                            />
-                                        </div>
-                                    )}
+                                    <div className="grid grid-cols-[1fr,auto] gap-2 items-center mt-2 border-t pt-2">
+                                        <Label className="text-xs text-brand-red">Rapportdauer (Min)</Label>
+                                        <Input
+                                            type="number"
+                                            className="w-20 text-right h-8"
+                                            value={r.duration}
+                                            onChange={(e) => {
+                                                const copy = [...reports]; copy[i].duration = Number(e.target.value); setReports(copy);
+                                            }}
+                                        />
+                                        {i < phaseDurations.length && (
+                                            <>
+                                                <Label className="text-xs text-gray-500">Phase bis {reports[i + 1].key} (Min)</Label>
+                                                <Input
+                                                    type="number"
+                                                    className="w-20 text-right h-8"
+                                                    value={phaseDurations[i]}
+                                                    disabled={reports[i + 1].fixed}
+                                                    onChange={(e) => {
+                                                        const copy = [...phaseDurations]; copy[i] = Number(e.target.value); setPhaseDurations(copy);
+                                                    }}
+                                                />
+                                            </>
+                                        )}
+                                    </div>
                                 </div>
                             ))}
                         </CardContent>
