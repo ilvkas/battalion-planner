@@ -11,14 +11,16 @@ const REHEARSAL_OFFSET_MIN = 30;
 
 export default function BattalionTimePlannerMockup() {
     const [iniTime, setIniTime] = useState("");
+    const [startReportIndex, setStartReportIndex] = useState(0);
     const [workStart, setWorkStart] = useState("07:30");
     const [workEnd, setWorkEnd] = useState("18:00");
     const [showOnlyReports, setShowOnlyReports] = useState(false);
+    const [controlsVisible, setControlsVisible] = useState(true);
 
     const [blockers, setBlockers] = useState([]);
 
     const [reports, setReports] = useState(
-        reportKeys.map((key, i) => ({ key, fixed: i === 0, fixedTime: i === 0 ? "" : "", duration: 60 }))
+        reportKeys.map((key) => ({ key, fixed: false, fixedTime: "", duration: 60 }))
     );
 
 
@@ -277,10 +279,6 @@ export default function BattalionTimePlannerMockup() {
     // Refactored synchronization to be safe
     const handleIniChange = (val) => {
         setIniTime(val);
-        const copy = [...reports];
-        copy[0].fixedTime = val;
-        copy[0].fixed = true;
-        setReports(copy);
     }
 
     const calculateTimeline = () => {
@@ -289,13 +287,13 @@ export default function BattalionTimePlannerMockup() {
         const entries = [];
         let cursor = new Date(iniTime);
 
-        for (let i = 0; i < reports.length; i++) {
+        for (let i = startReportIndex; i < reports.length; i++) {
             const r = reports[i];
 
             let reportStart;
             if (r.fixed && r.fixedTime) {
                 reportStart = movePastBlockers(new Date(r.fixedTime));
-            } else if (i === 0) {
+            } else if (i === startReportIndex) {
                 reportStart = movePastBlockers(new Date(iniTime));
             } else {
                 reportStart = movePastBlockers(cursor);
@@ -378,15 +376,28 @@ export default function BattalionTimePlannerMockup() {
     const format = (d) => new Date(d).toLocaleString("de-CH", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit", hour12: false });
 
     return (
-        <div className="min-h-screen bg-gray-100 pb-10">
+        <div className="min-h-screen bg-gray-100 pb-10 relative overflow-x-hidden">
             <div className="bg-brand-red text-white p-6 font-bold text-xl shadow-md">
                 Schweizer Armee Zeitrechner Aktionsplanung Battalion
             </div>
 
-            <div className="grid lg:grid-cols-2 gap-6 p-6 max-w-7xl mx-auto">
+            {/* Toggle Panel Button */}
+            <button 
+                onClick={() => setControlsVisible(!controlsVisible)}
+                className="fixed right-0 top-1/2 -translate-y-1/2 bg-[#f4f4f5] border border-r-0 border-[#e4e4e7] text-[#a1a1aa] p-2 rounded-l-md shadow-sm hover:bg-[#e4e4e7] hover:text-[#71717a] transition-all z-50 flex flex-col items-center justify-center w-8 h-24 opacity-50 hover:opacity-100 focus:outline-none focus:ring-0"
+                title={controlsVisible ? "Einstellungen ausblenden" : "Einstellungen einblenden"}
+            >
+                {controlsVisible ? (
+                    <span className="text-lg leading-none">▶</span>
+                ) : (
+                    <span className="text-lg leading-none">◀</span>
+                )}
+            </button>
+
+            <div className={`grid ${controlsVisible ? 'lg:grid-cols-[1fr_450px] gap-6 max-w-[1400px]' : 'grid-cols-1 max-w-4xl'} p-6 mx-auto transition-all duration-300 ease-in-out`}>
 
                 {/* Left Column: Timeline */}
-                <div className="order-2 lg:order-1">
+                <div className={`order-2 lg:order-1 transition-all ${controlsVisible ? '' : 'mx-auto w-full'}`}>
                     <Card className="rounded-2xl shadow h-fit sticky top-6">
                         <CardHeader className="flex flex-col gap-4 border-b pb-4">
                             {(hasPastItems || hasOverlapItems) && (
@@ -508,7 +519,8 @@ export default function BattalionTimePlannerMockup() {
                 </div>
 
                 {/* Right Column: Controls */}
-                <div className="grid gap-6 order-1 lg:order-2 h-fit">
+                {controlsVisible && (
+                <div className="grid gap-6 order-1 lg:order-2 h-fit animate-in fade-in slide-in-from-right-8 duration-300">
                     <Card className="rounded-2xl shadow">
                         <CardHeader><CardTitle>Grundparameter</CardTitle></CardHeader>
                         <CardContent className="grid gap-4">
@@ -523,8 +535,22 @@ export default function BattalionTimePlannerMockup() {
                                 </div>
                             </div>
                             <div className="grid gap-2 border-t border-gray-100 pt-4">
-                                <Label>Startzeit INI</Label>
-                                <Input type="datetime-local" value={iniTime} onChange={(e) => handleIniChange(e.target.value)} />
+                                <Label>Startpunkt</Label>
+                                <div className="grid grid-cols-[1fr,2fr] gap-4">
+                                    <select 
+                                        className="h-9 rounded-md border border-input bg-white px-3 py-1 text-sm shadow-sm"
+                                        value={startReportIndex}
+                                        onChange={(e) => {
+                                            const newIdx = Number(e.target.value);
+                                            setStartReportIndex(newIdx);
+                                        }}
+                                    >
+                                        {reportKeys.map((key, i) => (
+                                            <option key={key} value={i}>{key}</option>
+                                        ))}
+                                    </select>
+                                    <Input type="datetime-local" value={iniTime} onChange={(e) => handleIniChange(e.target.value)} />
+                                </div>
                             </div>
                         </CardContent>
                     </Card>
@@ -591,7 +617,9 @@ export default function BattalionTimePlannerMockup() {
                     <Card className="rounded-2xl shadow">
                         <CardHeader><CardTitle>Rapporte und Arbeitsphasen</CardTitle></CardHeader>
                         <CardContent className="grid gap-4">
-                            {reports.map((r, i) => (
+                            {reports.map((r, i) => {
+                                if (i < startReportIndex) return null;
+                                return (
                                 <div key={r.key} className="border rounded-lg p-4 grid gap-3 bg-white relative hover:border-red-300 transition-colors">
                                     <div className="flex justify-between items-center">
                                         <div className="font-bold text-lg text-brand-red w-12">{r.key}</div>
@@ -603,12 +631,12 @@ export default function BattalionTimePlannerMockup() {
                                         </div>
                                     </div>
 
-                                    {r.fixed && r.key !== "INI" && (
+                                    {r.fixed && i !== startReportIndex && (
                                         <Input type="datetime-local" value={r.fixedTime} onChange={(e) => {
                                             const copy = [...reports]; copy[i].fixedTime = e.target.value; setReports(copy);
                                         }} />
                                     )}
-                                    {r.key === "INI" && (
+                                    {i === startReportIndex && (
                                         <div className="text-sm text-gray-500 font-mono bg-gray-50 p-2 rounded">
                                             {iniTime ? new Date(iniTime).toLocaleString() : "Keine Startzeit"}
                                         </div>
@@ -640,10 +668,12 @@ export default function BattalionTimePlannerMockup() {
                                         )}
                                     </div>
                                 </div>
-                            ))}
+                            );
+                            })}
                         </CardContent>
                     </Card>
                 </div>
+                )}
             </div>
         </div>
     );

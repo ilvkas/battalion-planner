@@ -2,6 +2,11 @@
 
 All notable changes to the "Battalion TimePlanner" project will be documented in this file.
 
+## [0.2.0-dev] - 2026-03-19
+### Added
+- **Collapsible Settings Layout**: The entire right-hand parameters column (Grundparameter, Blocktermine, Rapporte) can now be smoothly toggled hidden or visible using a floating arrow button pinned to the right side of the screen. When hidden, the timeline elegantly centers and expands for maximum readability.
+- **Dynamic Start Report**: The hardcoded "Startzeit INI" parameter was upgraded to a generic "Startpunkt" selector. You can now select any report (INI, ORR, BUR, EFR, BGR) as your chronological anchor. All reports structurally preceding your selection are mathematically ignored and pruned from the interface to reduce clutter.
+
 ## [0.1.1] - 2026-03-18
 ### Added
 - **Timeline Day Separators**: A minimalist grey divider with explicitly capitalized date text now automatically segments the timeline vertically on multi-day drill schedules.
